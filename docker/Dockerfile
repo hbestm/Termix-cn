@@ -1,14 +1,16 @@
-# Stage 1: Install dependencies
+# syntax=docker/dockerfile:1.4
+
+# Stage 1: Dependencies - only install node_modules
 FROM node:22-slim AS deps
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
-COPY package*.json ./
+COPY package.json package-lock.json* ./
 
-RUN rm -rf node_modules package-lock.json && \
-    npm install --ignore-scripts --force && \
-    npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --ignore-scripts && \
+    npm rebuild better-sqlite3
 
 # Stage 2: Build frontend
 FROM deps AS frontend-builder
@@ -18,8 +20,7 @@ COPY . .
 
 RUN find public/fonts -name "*.ttf" ! -name "*Regular.ttf" ! -name "*Bold.ttf" ! -name "*Italic.ttf" -delete
 
-RUN npm cache clean --force && \
-    NODE_OPTIONS="--max-old-space-size=3072" npm run build
+RUN NODE_OPTIONS="--max-old-space-size=3072" npm run build
 
 # Stage 3: Build backend
 FROM deps AS backend-builder
@@ -27,21 +28,19 @@ WORKDIR /app
 
 COPY . .
 
-RUN npm rebuild better-sqlite3 --force
-
 RUN npm run build:backend
 
-# Stage 4: Production dependencies only
+# Stage 4: Production dependencies
 FROM node:22-slim AS production-deps
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
-COPY package*.json ./
+COPY package.json package-lock.json* ./
 
-RUN npm ci --only=production --ignore-scripts --force && \
-    npm rebuild better-sqlite3 bcryptjs --force && \
-    npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm,from=deps \
+    npm ci --only=production --ignore-scripts && \
+    npm rebuild better-sqlite3 bcryptjs
 
 # Stage 5: Final optimized image
 FROM node:22-slim
